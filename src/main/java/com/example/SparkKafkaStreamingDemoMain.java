@@ -26,7 +26,7 @@ public class SparkKafkaStreamingDemoMain {
 	// Kafka brokers URL for Spark Streaming to connect and fetched messages from.
 	private static final String KAFKA_BROKER_LIST = "localhost:9092";
 	// Time interval in milliseconds of Spark Streaming Job, 10 seconds by default.
-	private static final int STREAM_WINDOW_MILLISECONDS = 1000; // 10 seconds
+	private static final int STREAM_WINDOW_MILLISECONDS = 100000; // 10 seconds
 	// Kafka telemetry topic to subscribe to. This should match to the topic in the
 	// rule action.
 	private static final Collection<String> TOPICS = Arrays.asList("votes");
@@ -39,7 +39,7 @@ public class SparkKafkaStreamingDemoMain {
 		kafkaParams.put("bootstrap.servers", KAFKA_BROKER_LIST);
 		kafkaParams.put("key.deserializer", StringDeserializer.class);
 		kafkaParams.put("value.deserializer", StringDeserializer.class);
-		kafkaParams.put("group.id", "DEFAULT_GROUP_ID-1");
+		kafkaParams.put("group.id", "groupId-15");
 		kafkaParams.put("auto.offset.reset", "latest");
 		kafkaParams.put("enable.auto.commit", false);
 		return kafkaParams;
@@ -52,7 +52,7 @@ public class SparkKafkaStreamingDemoMain {
 	private static class StreamRunner {
 
 		void start() throws Exception {
-			SparkConf conf = new SparkConf().setAppName(APP_NAME).setMaster("local");
+			SparkConf conf = new SparkConf().setAppName(APP_NAME).setMaster("local[4]");
 
 			try (JavaStreamingContext ssc = new JavaStreamingContext(conf, new Duration(STREAM_WINDOW_MILLISECONDS))) {
 
@@ -76,11 +76,13 @@ public class SparkKafkaStreamingDemoMain {
 			}
 		}
 
+		@SuppressWarnings("serial")
 		private static class UserDataMapper implements Function<ConsumerRecord<String, String>, User> {
 			private static final ObjectMapper mapper = new ObjectMapper();
 
 			@Override
 			public User call(ConsumerRecord<String, String> record) throws Exception {
+				System.out.println(record);
 				return mapper.readValue(record.value(), User.class);
 			}
 		}
