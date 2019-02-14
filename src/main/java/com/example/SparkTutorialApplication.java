@@ -32,13 +32,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @SpringBootApplication
 public class SparkTutorialApplication implements CommandLineRunner {
 
+	@Autowired
+	private CrudRepository crudRepository;
+
 	// Kafka brokers URL for Spark Streaming to connect and fetched messages from.
 	private static final String KAFKA_BROKER_LIST = "localhost:9092";
 	// Time interval in milliseconds of Spark Streaming Job, 10 seconds by default.
 	private static final int STREAM_WINDOW_MILLISECONDS = 10000; // 10 seconds
 	// Kafka telemetry topic to subscribe to. This should match to the topic in the
 	// rule action.
-	private static final Collection<String> TOPICS = Arrays.asList("users-1");
+	private static final Collection<String> TOPICS = Arrays.asList("users-02");
 	// The application name
 	public static final String APP_NAME = "Kafka Spark Streaming App";
 
@@ -48,9 +51,12 @@ public class SparkTutorialApplication implements CommandLineRunner {
 		kafkaParams.put("bootstrap.servers", KAFKA_BROKER_LIST);
 		kafkaParams.put("key.deserializer", StringDeserializer.class);
 		kafkaParams.put("value.deserializer", StringDeserializer.class);
-		kafkaParams.put("group.id", "groupId-03");
+		kafkaParams.put("group.id", "groupId-01");
 		kafkaParams.put("auto.offset.reset", "earliest");
 		kafkaParams.put("enable.auto.commit", false);
+		kafkaParams.put("enable.auto.commit", false);
+		kafkaParams.put("max.poll.records", 100);
+		kafkaParams.put("max.poll.interval.ms", 300000);
 		return kafkaParams;
 	}
 
@@ -58,54 +64,45 @@ public class SparkTutorialApplication implements CommandLineRunner {
 		SpringApplication.run(SparkTutorialApplication.class, args);
 	}
 
-	private static class StreamRunner {
+	@Override
+	public void run(String... args) throws Exception {
+		SparkConf conf = new SparkConf().setAppName(APP_NAME).setMaster("local");
 
-		@Autowired
-		private CrudRepository crudRepository;
+		try (JavaStreamingContext ssc = new JavaStreamingContext(conf, new Duration(STREAM_WINDOW_MILLISECONDS))) {
 
-		void start() throws Exception {
-			// Spark Initialization
-			SparkConf conf = new SparkConf().setAppName(APP_NAME).setMaster("local");
+			JavaInputDStream<ConsumerRecord<String, String>> stream = KafkaUtils.createDirectStream(ssc,
+					LocationStrategies.PreferConsistent(),
+					ConsumerStrategies.<String, String>Subscribe(TOPICS, getKafkaParams()));
 
-			try (JavaStreamingContext ssc = new JavaStreamingContext(conf, new Duration(STREAM_WINDOW_MILLISECONDS))) {
+			stream.foreachRDD(rdd -> {
+				// Map incoming JSON to User objects
+				JavaRDD<User> userRDD = rdd.map(new UserDataMapper());
+				//
+				List<User> aggData = userRDD.map(t -> new User(t.getUsername(), t.getPassword())).collect();
+				List<Put> putList = new ArrayList<>();
+				for (User user : aggData) {
+					String rowID = UUID.randomUUID().toString();
+					putList.add(
+							crudRepository.put("tbl_user", rowID, "users", "username", user.getUsername().getBytes()));
+					putList.add(
+							crudRepository.put("tbl_user", rowID, "users", "password", user.getPassword().getBytes()));
+				}
+				crudRepository.batchPut("tbl_user", putList);
+			});
 
-				JavaInputDStream<ConsumerRecord<String, String>> stream = KafkaUtils.createDirectStream(ssc,
-						LocationStrategies.PreferConsistent(),
-						ConsumerStrategies.<String, String>Subscribe(TOPICS, getKafkaParams()));
-
-				stream.foreachRDD(rdd -> {
-					// Map incoming JSON to User objects
-					JavaRDD<User> userRDD = rdd.map(new UserDataMapper());
-					//
-					List<User> aggData = userRDD.map(t -> new User(t.getUsername(), t.getPassword())).collect();
-					List<Put> putList = new ArrayList<>();
-					for (User user : aggData) {
-						String rowID = UUID.randomUUID().toString();
-						putList.add(crudRepository.put("tbl_user", rowID, "users", "username", user.getUsername().getBytes()));
-						putList.add(crudRepository.put("tbl_user", rowID, "users", "password", user.getPassword().getBytes()));
-					}
-					crudRepository.batchPut("tbl_user", putList);
-				});
-
-				ssc.start();
-				ssc.awaitTermination();
-			}
-		}
-
-		@SuppressWarnings("serial")
-		private static class UserDataMapper implements Function<ConsumerRecord<String, String>, User> {
-			private static final ObjectMapper mapper = new ObjectMapper();
-
-			@Override
-			public User call(ConsumerRecord<String, String> record) throws Exception {
-				System.out.println(record);
-				return mapper.readValue(record.value(), User.class);
-			}
+			ssc.start();
+			ssc.awaitTermination();
 		}
 	}
 
-	@Override
-	public void run(String... args) throws Exception {
-		new StreamRunner().start();
+	@SuppressWarnings("serial")
+	private static class UserDataMapper implements Function<ConsumerRecord<String, String>, User> {
+		private static final ObjectMapper mapper = new ObjectMapper();
+
+		@Override
+		public User call(ConsumerRecord<String, String> record) throws Exception {
+			System.out.println(record);
+			return mapper.readValue(record.value(), User.class);
+		}
 	}
 }
